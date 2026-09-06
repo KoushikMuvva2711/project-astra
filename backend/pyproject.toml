@@ -33,7 +33,10 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "httpx>=0.28",
-    "ruff>=0.8",
+    # Pinned exactly, unlike the others. A linter is a gate, and an unpinned gate
+    # fails on commits that changed nothing the day a new rule ships — which is
+    # exactly what happened with `>=0.8`. Bump this deliberately, not by surprise.
+    "ruff==0.16.3",
 ]
 
 [tool.setuptools.packages.find]
@@ -48,6 +51,13 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 # B008 flags function calls in argument defaults. `Depends(...)` in a default is
 # the documented FastAPI idiom, so the rule is noise in this codebase.
 ignore = ["B008"]
+
+[tool.ruff.lint.isort]
+# Stated rather than inferred. Ruff usually works `app` out from the directory
+# layout, but that inference depends on where it is invoked from, and when it
+# fails `app` is treated as third-party: `import app.db.models` then sorts above
+# alembic and sqlalchemy, and the same file passes locally while failing in CI.
+known-first-party = ["app"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
