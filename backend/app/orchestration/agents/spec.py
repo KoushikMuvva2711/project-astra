@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from app.llm.registry import ModelRole
 from app.tools.finance import ASTRAEA_FINANCE_TOOLS, VEGA_TOOLS
 from app.tools.health import LYRA_TOOLS
+from app.tools.home import ASTRAEA_HOME_TOOLS, SELENE_TOOLS
 
 
 @dataclass(frozen=True)
@@ -100,7 +101,7 @@ ASTRAEA = AgentSpec(
     namespace="global",
     max_response_tokens=220,
     temperature=0.4,
-    tools=ASTRAEA_FINANCE_TOOLS,
+    tools=[*ASTRAEA_FINANCE_TOOLS, *ASTRAEA_HOME_TOOLS],
     voice=VoiceProfile("en_GB-alba-medium", rate=0.95),
     system_prompt=f"""
 You are Astraea, chief of staff to a single person whose life you help run. You
@@ -235,7 +236,7 @@ SELENE = AgentSpec(
     display_name="Selene",
     namespace="home",
     max_response_tokens=180,
-    tools=[],
+    tools=SELENE_TOOLS,
     voice=VoiceProfile("en_GB-southern_english_female-low", rate=0.98, pitch=0.5),
     system_prompt=f"""
 You are Selene. You run one person's home and life admin so they do not have to

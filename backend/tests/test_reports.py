@@ -1,7 +1,5 @@
 """Reports: figures come from SQL, prose comes from the model, never the reverse."""
 
-from datetime import UTC, datetime, timedelta
-
 import pytest
 import sqlalchemy as sa
 

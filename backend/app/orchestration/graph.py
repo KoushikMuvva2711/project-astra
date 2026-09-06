@@ -408,7 +408,9 @@ async def run_turn(
             degraded.append("suppressed an unsupported confirmation")
 
         if fast_path_result is not None:
-            text, substituted = _guard_figures(text, fast_path_result)
+            text, substituted = _guard_figures(
+                text, fast_path_result, intent.tool if intent else None
+            )
             if substituted:
                 degraded.append("substituted the tool's own wording for the figure")
 
@@ -515,7 +517,37 @@ def _clarifying_question(result) -> str | None:
     return "How much was that?"
 
 
-def _guard_figures(text: str, result) -> tuple[str, bool]:
+# The field each read tool's answer actually turns on. Declared per tool rather
+# than inferred from the payload: a result carries several numbers, and guarding
+# an incidental one (a `days_left` inside a list) would fire on correct answers.
+_HEADLINE_COUNT = {
+    "reminder_list": "count",
+    "grocery_list": "count",
+    "document_expiry": "count",
+    "inventory_status": "low_count",
+    "workout_history": "session_count",
+}
+
+# Counts are small and must be spoken as words — the invariants require it — so a
+# digit-substring test would reject "one reminder" as a fabrication. Both forms
+# count as stating the number.
+_COUNT_WORDS = {
+    0: ("zero", "no", "none", "nothing", "empty", "not any"),
+    1: ("one", "a single"),
+    2: ("two", "both", "a couple"),
+    3: ("three",), 4: ("four",), 5: ("five",), 6: ("six",), 7: ("seven",),
+    8: ("eight",), 9: ("nine",), 10: ("ten",), 11: ("eleven",), 12: ("twelve",),
+}
+
+
+def _states_count(text: str, value: int) -> bool:
+    if re.search(rf"\b{value}\b", text):
+        return True
+    words = _COUNT_WORDS.get(value)
+    return bool(words and re.search(rf"\b(?:{'|'.join(words)})\b", text, re.IGNORECASE))
+
+
+def _guard_figures(text: str, result, tool_name: str | None = None) -> tuple[str, bool]:
     """Ensure a stated figure is the tool's figure.
 
     PRD FR-T2 says numbers come from SQL, never from the model. The prompt says
@@ -526,8 +558,20 @@ def _guard_figures(text: str, result) -> tuple[str, bool]:
     When the response fails to contain the figure the tool returned, the tool's
     own wording is used instead. The agent loses some voice on that turn; it does
     not lose correctness, and correctness is the one thing Vega cannot trade.
+
+    Two shapes of figure are guarded. Money totals compare on digits, because
+    they are always spoken as digits and the model may reformat the separators.
+    Counts compare on digits *or* the number word, because "one reminder" is the
+    required rendering and rejecting it would substitute a correct answer.
     """
     if not result.ok or result.needs_confirmation:
+        return text, False
+
+    count_key = _HEADLINE_COUNT.get(tool_name or "")
+    if count_key is not None:
+        count = result.data.get(count_key)
+        if isinstance(count, int) and not _states_count(text, count):
+            return result.message or text, True
         return text, False
 
     figure = result.data.get("total") or result.data.get("amount")
@@ -580,6 +624,29 @@ def _event_for(tool_name: str, spec: AgentSpec, result, context: ToolContext):
             "agent": spec.name,
             "turn_id": context.turn_id,
             "payload": {"amount_minor": result.data.get("amount_minor")},
+        }
+    if tool_name == "reminder_create":
+        return {
+            "type": "reminder.set",
+            "agent": spec.name,
+            "turn_id": context.turn_id,
+            "payload": {
+                "subject": result.data.get("subject"),
+                "due_at": result.data.get("due_at"),
+                "recurrence": result.data.get("recurrence"),
+            },
+        }
+    if tool_name in ("grocery_add", "inventory_consume", "grocery_clear"):
+        return {
+            "type": "inventory.changed",
+            "agent": spec.name,
+            "turn_id": context.turn_id,
+            "payload": {
+                "item": result.data.get("item"),
+                "remaining": result.data.get("remaining"),
+                "added_to_list": result.data.get("added_to_list"),
+                "restocked": tool_name == "grocery_clear",
+            },
         }
     return None
 

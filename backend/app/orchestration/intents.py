@@ -39,7 +39,10 @@ SPEND_VERBS = re.compile(
 # contains a spend verb but is a question, not a log.
 QUERY_PHRASES = re.compile(
     r"\b(how much|what did i spend|what have i spent|total|summary|report|"
-    r"breakdown|where did.*go|show me|list)\b",
+    r"breakdown|where did.*go|show me|"
+    # "list" needs a financial object. Bare, it catches "add rice to the list"
+    # and answers a grocery request with a spend total.
+    r"list (?:my |the |all )?(?:expenses|spending|spends|transactions|payments))\b",
     re.IGNORECASE,
 )
 
@@ -138,6 +141,8 @@ def detect(agent: str, text: str) -> Intent | None:
         return None
     if agent == "lyra":
         return _detect_health(text)
+    if agent == "selene":
+        return _detect_home(text)
     if agent not in _FINANCE_READERS:
         return None
 
@@ -212,6 +217,129 @@ def _detect_health(text: str) -> Intent | None:
             return Intent(
                 tool="meal_log", arguments={"text": text}, blocks_write_tools=True
             )
+
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Selene
+# --------------------------------------------------------------------------- #
+
+REMINDER_VERBS = re.compile(
+    r"\b(remind me|set a reminder|set an alarm for|don'?t let me forget|"
+    r"put a reminder)\b",
+    re.IGNORECASE,
+)
+
+REMINDER_QUERY = re.compile(
+    # "on" is deliberately absent: "what's on the grocery list" is not a reminder
+    # query, and a bare "on" swallows it.
+    r"\b(what'?s? (due|coming up|pending)|what do i have (coming|due)|"
+    r"any reminders|my reminders|what'?s? left to do|anything due)\b",
+    re.IGNORECASE,
+)
+
+GROCERY_QUERY = re.compile(
+    r"\b(what'?s? on (the|my) (grocery |shopping )?list|"
+    r"(grocery|shopping) list|what do i need to buy|what am i out of)\b",
+    re.IGNORECASE,
+)
+
+GROCERY_ADD = re.compile(
+    r"\b(?:add|put)\s+(?P<item>.+?)\s+(?:to|on)\s+(?:the\s+|my\s+)?"
+    r"(?:grocery|shopping)?\s*list\b",
+    re.IGNORECASE,
+)
+
+NEED_TO_BUY = re.compile(
+    r"\b(?:i\s+)?need (?:to (?:buy|get|pick up)\s+)?(?:some\s+)?(?P<item>.+)$",
+    re.IGNORECASE,
+)
+
+RAN_OUT = re.compile(
+    r"\b(?:we(?:'re| are)?|i(?:'m| am)?)?\s*(?:completely |almost )?"
+    r"(?:out of|run out of|ran out of|finished (?:the|our)?|khatam)\s+(?P<item>.+)$"
+    r"|\b(?P<item2>[\w\s]{2,40}?)\s+(?:is|are)\s+(?:finished|over|khatam|done|empty)\b",
+    re.IGNORECASE,
+)
+
+LOW_STOCK_QUERY = re.compile(
+    r"\b(what'?s? running low|running low|what'?s? low|stock check|"
+    r"how much .* (do i have|is left)|do i have any)\b",
+    re.IGNORECASE,
+)
+
+DOCUMENT_QUERY = re.compile(
+    r"\b(what'?s? expiring|expiring soon|document.*expir|passport.*expir|"
+    r"visa.*expir|when does my .* expire)\b",
+    re.IGNORECASE,
+)
+
+# Words that survive item extraction but are not the item.
+_ITEM_NOISE = re.compile(
+    r"\b(selene|please|some|a|an|the|more|of|for|home|today|tomorrow|"
+    r"grocery|shopping|list)\b",
+    re.IGNORECASE,
+)
+
+
+def _clean_item(raw: str) -> str | None:
+    item = _ITEM_NOISE.sub(" ", raw)
+    item = re.sub(r"[^\w\s-]", " ", item)
+    item = re.sub(r"\s+", " ", item).strip().lower()
+    # Multi-word leftovers are usually a sentence, not an item. Selene's tools
+    # take a noun; anything longer goes to the model rather than being guessed at.
+    return item if item and len(item.split()) <= 3 else None
+
+
+def _detect_home(text: str) -> Intent | None:
+    """Selene's deterministic paths.
+
+    Reminder creation is her highest-frequency turn and has one correct outcome,
+    so it must not depend on the model choosing to emit a call — a fluent
+    "Set, the 1st" with nothing written is the exact failure this design forbids.
+    """
+    # Specific verbs before broad queries. "Put milk on the shopping list"
+    # contains "shopping list" and would otherwise be read as a request to hear
+    # the list back rather than to add to it.
+    if REMINDER_VERBS.search(text):
+        return Intent(
+            tool="reminder_create", arguments={"text": text}, blocks_write_tools=True
+        )
+
+    if match := GROCERY_ADD.search(text):
+        if item := _clean_item(match.group("item")):
+            return Intent(
+                tool="grocery_add", arguments={"item": item}, blocks_write_tools=True
+            )
+        return None
+
+    if GROCERY_QUERY.search(text):
+        return Intent(tool="grocery_list", arguments={})
+
+    if REMINDER_QUERY.search(text):
+        return Intent(tool="reminder_list", arguments={})
+
+    if DOCUMENT_QUERY.search(text):
+        return Intent(tool="document_expiry", arguments={})
+
+    if LOW_STOCK_QUERY.search(text):
+        return Intent(tool="inventory_status", arguments={})
+
+    if match := RAN_OUT.search(text):
+        raw = match.group("item") or match.group("item2") or ""
+        if item := _clean_item(raw):
+            return Intent(
+                tool="inventory_consume",
+                arguments={"item": item, "text": text},
+                blocks_write_tools=True,
+            )
+        return None
+
+    if (match := NEED_TO_BUY.search(text)) and (item := _clean_item(match.group("item"))):
+        return Intent(
+            tool="grocery_add", arguments={"item": item}, blocks_write_tools=True
+        )
 
     return None
 

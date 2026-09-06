@@ -171,3 +171,142 @@ def test_unconfirmed_results_are_not_guarded():
     result = ToolResult.confirm("ambiguous", heard="18 rupees")
     _, substituted = _guard_figures("Was that eighteen or eighty?", result)
     assert not substituted
+
+
+# ── Selene's fast paths ──────────────────────────────────────────────────────
+#
+# Reminder creation is her highest-frequency turn and has one correct outcome, so
+# it must not depend on the model choosing to emit a call — a fluent "Set, the
+# 1st" with nothing written is the failure this whole mechanism exists to prevent.
+
+@pytest.mark.parametrize(
+    "utterance,expected",
+    [
+        ("remind me to pay rent on the 1st", "reminder_create"),
+        ("set a reminder to call the plumber tomorrow", "reminder_create"),
+        ("don't let me forget to renew the visa on 20 October", "reminder_create"),
+        ("what's due this week", "reminder_list"),
+        ("any reminders", "reminder_list"),
+        ("what's on the grocery list", "grocery_list"),
+        ("add rice to the list", "grocery_add"),
+        ("put milk on the shopping list", "grocery_add"),
+        ("we're out of rice", "inventory_consume"),
+        ("the dal is finished", "inventory_consume"),
+        ("what's running low", "inventory_status"),
+        ("what's expiring soon", "document_expiry"),
+    ],
+)
+def test_selene_fast_paths(utterance, expected):
+    intent = detect("selene", utterance)
+    assert intent is not None, f"no intent for {utterance!r}"
+    assert intent.tool == expected
+
+
+def test_adding_to_a_list_is_not_read_as_asking_for_it():
+    """"Put milk on the shopping list" contains "shopping list". Specific verbs
+    are checked before broad queries so the add wins."""
+    assert detect("selene", "put milk on the shopping list").tool == "grocery_add"
+    assert detect("selene", "what's on the shopping list").tool == "grocery_list"
+
+
+def test_selene_write_paths_block_a_second_write():
+    """Otherwise the model could log the same item twice in one turn."""
+    for utterance in ("remind me to pay rent on the 1st", "add rice to the list"):
+        assert detect("selene", utterance).blocks_write_tools
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "how has the house been treating you",
+        "I need to think about whether the lease is worth renewing",
+        "thanks selene",
+    ],
+)
+def test_selene_conversation_is_left_to_the_model(utterance):
+    assert detect("selene", utterance) is None
+
+
+def test_selene_intents_do_not_leak_to_other_agents():
+    """Namespace isolation applies to the fast path too."""
+    assert detect("lyra", "remind me to pay rent on the 1st") is None
+    assert detect("nova", "add rice to the list") is None
+
+
+def test_a_grocery_phrasing_does_not_trigger_a_spend_query():
+    """A bare "list" in Vega's query pattern answered "add rice to the list"
+    with a spend total. The object has to be financial."""
+    assert detect("vega", "add rice to the list") is None
+    assert detect("vega", "list my expenses this month").tool == "expense_total"
+
+
+# ── Count guard ──────────────────────────────────────────────────────────────
+#
+# Money totals are spoken as digits; counts are spoken as words. A digit-only
+# check would reject "one reminder" — the required rendering — and substitute the
+# tool's wording over a correct answer.
+
+def _listing(count, message):
+    return ToolResult.success(message, count=count, reminders=[])
+
+
+def test_a_count_spoken_as_a_word_is_accepted():
+    text, substituted = _guard_figures(
+        "You have one reminder due this week.",
+        _listing(1, "1 due in the next 7 days."),
+        "reminder_list",
+    )
+    assert not substituted
+    assert text == "You have one reminder due this week."
+
+
+def test_a_count_spoken_as_a_digit_is_accepted():
+    _, substituted = _guard_figures(
+        "2 things are due.", _listing(2, "2 due in the next 7 days."), "reminder_list"
+    )
+    assert not substituted
+
+
+def test_a_wrong_count_is_replaced_by_the_tools_wording():
+    text, substituted = _guard_figures(
+        "You have three reminders due this week.",
+        _listing(1, "1 due in the next 7 days."),
+        "reminder_list",
+    )
+    assert substituted
+    assert text == "1 due in the next 7 days."
+
+
+def test_an_empty_result_narrated_as_non_empty_is_replaced():
+    """The dangerous direction: inventing rows that do not exist."""
+    text, substituted = _guard_figures(
+        "You have a dentist appointment and the rent to pay.",
+        _listing(0, "Nothing due in the next 7 days."),
+        "reminder_list",
+    )
+    assert substituted
+    assert text == "Nothing due in the next 7 days."
+
+
+def test_an_empty_result_narrated_as_empty_is_accepted():
+    for phrasing in ("Nothing this week.", "No reminders due.", "None due."):
+        _, substituted = _guard_figures(
+            phrasing, _listing(0, "Nothing due in the next 7 days."), "reminder_list"
+        )
+        assert not substituted, phrasing
+
+
+def test_money_totals_still_compare_on_digits():
+    """The original behaviour is unchanged for Vega."""
+    result = ToolResult.success("3,250 rupees this month.", total="3250")
+    _, substituted = _guard_figures("You spent 3250 rupees.", result, "expense_total")
+    assert not substituted
+
+    _, substituted = _guard_figures("You spent 900 rupees.", result, "expense_total")
+    assert substituted
+
+
+def test_an_unguarded_tool_is_left_alone():
+    result = ToolResult.success("Set. Pay rent, 1 October.", reminder_id=4)
+    _, substituted = _guard_figures("Set, rent on the 1st.", result, "reminder_create")
+    assert not substituted
