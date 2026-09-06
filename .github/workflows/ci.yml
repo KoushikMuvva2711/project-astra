@@ -1,0 +1,119 @@
+name: CI
+
+# Runs on every push to develop and on any PR. Master is protected by the same
+# checks via the PR that merges into it.
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop, master]
+  workflow_dispatch:
+
+concurrency:
+  # A newer push supersedes an in-flight run on the same branch.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Must be the pgvector image, not plain postgres — migration 0001
+        # creates the vector extension and HNSW indexes.
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: astra
+          POSTGRES_PASSWORD: ci-postgres-password
+          POSTGRES_DB: astra
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U astra -d astra"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      # The suite is hermetic: it never calls a cloud model, so CI needs no real
+      # API key. The only "secret" here is a dummy device token long enough to
+      # satisfy the config validator that rejects placeholders.
+      ASTRA_DEVICE_TOKEN: ci-token-not-a-real-secret-0123456789abcdef
+      ASTRA_ENV: development
+      POSTGRES_USER: astra
+      POSTGRES_PASSWORD: ci-postgres-password
+      POSTGRES_DB: astra
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      ASTRA_MODEL_PROFILE: local_only
+      # Points at nothing on purpose: model calls fail fast with connection
+      # refused, and every model-touching path is required to degrade rather
+      # than raise. If a test needs a live model, that is the bug.
+      OLLAMA_BASE_URL: http://localhost:11434
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check app tests
+
+      - name: Migrate
+        run: alembic upgrade head
+
+      - name: Check models match migrations
+        # Catches the drift class that would otherwise only appear when someone
+        # runs autogenerate months later and gets a destructive diff.
+        run: alembic check
+
+      - name: Test
+        run: pytest -q --tb=short
+
+  secrets-scan:
+    name: No secrets committed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject committed secrets
+        run: |
+          set -euo pipefail
+          fail=0
+
+          # .env holds the device token and the API key. It is gitignored; this
+          # is the backstop for a `git add -f` or an ignore-file regression.
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error::.env is tracked. Remove it: git rm --cached .env"
+            fail=1
+          fi
+
+          # Real Anthropic keys start sk-ant-. Exclude this workflow so the
+          # pattern below does not match itself.
+          if git grep -nE 'sk-ant-[A-Za-z0-9_-]{20,}' -- . ':!.github/workflows/ci.yml'; then
+            echo "::error::An Anthropic API key appears to be committed. Rotate it immediately."
+            fail=1
+          fi
+
+          exit $fail

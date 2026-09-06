@@ -1,0 +1,180 @@
+name: Release
+
+# Merging into master cuts a version: tag, multi-arch image, GitHub Release.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  # Never build two releases at once — they would race for the same tag.
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # create the git tag and the Release
+  packages: write   # push to GHCR
+
+jobs:
+  verify:
+    name: Verify before release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: astra
+          POSTGRES_PASSWORD: ci-postgres-password
+          POSTGRES_DB: astra
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U astra -d astra"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      ASTRA_DEVICE_TOKEN: ci-token-not-a-real-secret-0123456789abcdef
+      POSTGRES_USER: astra
+      POSTGRES_PASSWORD: ci-postgres-password
+      POSTGRES_DB: astra
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      ASTRA_MODEL_PROFILE: local_only
+      OLLAMA_BASE_URL: http://localhost:11434
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tags needed for the duplicate-version check
+
+      - name: Read and validate version
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(tr -d ' \t\n\r' < VERSION)"
+
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::VERSION must be MAJOR.MINOR.PATCH, got '$version'"
+            exit 1
+          fi
+
+          # Refusing to overwrite an existing tag is what makes "merge to master
+          # cuts a version" meaningful: forgetting to bump fails loudly here
+          # rather than silently shipping the previous version's tag.
+          if git rev-parse "v$version" >/dev/null 2>&1; then
+            echo "::error::Tag v$version already exists. Bump VERSION before merging to master."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$version"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        working-directory: backend
+        run: ruff check app tests
+
+      - name: Migrate and test
+        working-directory: backend
+        run: |
+          alembic upgrade head
+          alembic check
+          pytest -q --tb=short
+
+  build:
+    name: Build and publish
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase image name
+        id: image
+        # GHCR rejects uppercase; GitHub usernames may contain them.
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/astra-api" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          # arm64 is not optional: the Oracle Always Free instance is Ampere.
+          # amd64 is kept so the same image runs on a normal x86 box.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ env.VERSION }}
+            ${{ steps.image.outputs.name }}:latest
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Tag the commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Release notes
+        id: notes
+        run: |
+          set -euo pipefail
+          previous="$(git tag --sort=-v:refname | grep -v "^v$VERSION$" | head -1 || true)"
+          {
+            echo "notes<<EOF"
+            if [ -n "$previous" ]; then
+              echo "### Changes since $previous"
+              git log --pretty='- %s (%h)' "$previous"..HEAD
+            else
+              echo "### First release"
+              git log --pretty='- %s (%h)' -20
+            fi
+            echo
+            echo "### Image"
+            echo '```'
+            echo "docker pull ${{ steps.image.outputs.name }}:$VERSION"
+            echo '```'
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: Astra v${{ env.VERSION }}
+          body: ${{ steps.notes.outputs.notes }}

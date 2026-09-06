@@ -1,0 +1,97 @@
+# Wake-name routing corpus.
+#
+# This file is the regression substrate for the single most user-visible failure
+# mode in Astra. Every routing failure observed in real use gets added here as a
+# case — see docs/conversation-architecture.md §4.4. Mine candidates with:
+#
+#   SELECT transcript, agent, route_confidence, route_method
+#   FROM turns WHERE route_confidence < 0.85 ORDER BY created_at DESC;
+#
+# `expect: null` means the utterance must NOT route to any agent — it should fall
+# through. False positives are worse than false negatives: falling through costs
+# a clarifying question, misrouting writes data into the wrong namespace.
+
+routes:
+  # ── Clean input ───────────────────────────────────────────────────────────
+  - {say: "Astraea, what should I focus on today?", expect: astraea}
+  - {say: "Lyra, I had two eggs and a protein shake.", expect: lyra}
+  - {say: "Vega, I spent 180 on coffee.", expect: vega}
+  - {say: "Nova, continue the AI engineering project.", expect: nova}
+  - {say: "Athena, update my higher studies roadmap.", expect: athena}
+  - {say: "Selene, remind me to pay rent on the 1st.", expect: selene}
+
+  # ── Astraea ───────────────────────────────────────────────────────────────
+  - {say: "astraya what's on today", expect: astraea}
+  - {say: "astrea give me the briefing", expect: astraea}
+  - {say: "astria how am I doing", expect: astraea}
+  - {say: "astra summarise my week", expect: astraea}
+  - {say: "extra what should I focus on", expect: astraea}   # alias table
+  - {say: "astro anything urgent", expect: astraea}
+
+  # ── Lyra ──────────────────────────────────────────────────────────────────
+  - {say: "lira log my breakfast", expect: lyra}
+  - {say: "leera I did legs today", expect: lyra}
+  - {say: "liar how's my protein", expect: lyra}             # phonetic LR == LR
+  - {say: "lyre what should I eat", expect: lyra}
+  - {say: "laira track this meal", expect: lyra}
+
+  # ── Vega ──────────────────────────────────────────────────────────────────
+  - {say: "vaga spent 250 on auto", expect: vega}
+  - {say: "bega how much this month", expect: vega}
+  - {say: "vegas log 400 groceries", expect: vega}
+  - {say: "viga what's my balance", expect: vega}
+  - {say: "veiga add an expense", expect: vega}
+
+  # ── Nova ──────────────────────────────────────────────────────────────────
+  - {say: "nofa where did I leave off", expect: nova}
+  - {say: "noba what's next on astra", expect: nova}
+  - {say: "no va continue the project", expect: nova}        # two-token join
+  - {say: "nowa show my tasks", expect: nova}
+
+  # ── Athena ────────────────────────────────────────────────────────────────
+  - {say: "athina what's this week's plan", expect: athena}
+  - {say: "atena how's GRE prep going", expect: athena}
+  - {say: "aetna update my roadmap", expect: athena}
+  - {say: "athene schedule a paper", expect: athena}
+
+  # ── Selene ────────────────────────────────────────────────────────────────
+  - {say: "saleen add milk to the list", expect: selene}
+  - {say: "celine remind me tomorrow", expect: selene}       # SLN == SLN
+  - {say: "seline what's in the pantry", expect: selene}
+  - {say: "sealine set a reminder", expect: selene}
+
+  # ── Leading fillers ───────────────────────────────────────────────────────
+  - {say: "hey Vega log 90 rupees", expect: vega}
+  - {say: "ok Lyra I skipped lunch", expect: lyra}
+  - {say: "um Nova what was I doing", expect: nova}
+  - {say: "hello Selene add rice", expect: selene}
+  - {say: "hey astraea brief me", expect: astraea}
+
+  # ── Must NOT route ────────────────────────────────────────────────────────
+  # These are ordinary English that must fall through rather than be forced onto
+  # the nearest-sounding agent.
+  - {say: "astrology is nonsense", expect: null}
+  - {say: "a laser pointer for the cat", expect: null}
+  - {say: "novel idea but expensive", expect: null}
+  - {say: "what's the weather like", expect: null}
+  - {say: "remind me to buy milk", expect: null}
+  - {say: "how much did I spend", expect: null}
+  - {say: "selenium supplements", expect: null}
+  - {say: "athens is in greece", expect: null}
+  - {say: "vegan food options", expect: null}
+
+# Follow-up turns inside an open session. These carry no wake name and must stay
+# with the active agent — never be reassigned to Astraea.
+session_continuations:
+  - {say: "actually make that 280", active: vega}
+  - {say: "no it was yesterday", active: vega}
+  - {say: "and a protein shake after", active: lyra}
+  - {say: "what about last month", active: vega}
+  - {say: "keep going", active: nova}
+  - {say: "yes do that", active: selene}
+
+# An explicit different name inside an open session closes it and switches.
+session_switches:
+  - {say: "Lyra I had lunch", active: vega, expect: lyra}
+  - {say: "vaga log 300", active: lyra, expect: vega}
+  - {say: "astraea what's the overall picture", active: nova, expect: astraea}

@@ -1,0 +1,17 @@
+# A Windows venv inside a Linux image is both broken and large.
+.venv/
+venv/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Secrets come from compose env_file at runtime, never baked into the image.
+.env
+*.env
+!.env.example
+
+.git/

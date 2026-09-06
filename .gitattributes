@@ -1,0 +1,13 @@
+# Normalise line endings. Without this, files committed from Windows carry CRLF
+# into the Linux container and shell scripts fail with "bad interpreter: ^M" —
+# a confusing failure that only appears in CI, never locally.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+*.gguf binary
+*.png  binary
+*.jpg  binary

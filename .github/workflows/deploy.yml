@@ -1,0 +1,163 @@
+name: Deploy
+
+# Manual on purpose. Astra holds one person's finance and health data, and a
+# deploy restarts the API and runs migrations — that should be a decision, not
+# a side effect of merging.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to deploy (e.g. 0.1.0), or 'latest'"
+        required: true
+        default: latest
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to server
+    runs-on: ubuntu-latest
+    environment: production   # add required reviewers here for a manual gate
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image name
+        id: image
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/astra-api" >> "$GITHUB_OUTPUT"
+
+      - name: Write compose file for the server
+        run: |
+          cat > docker-compose.deploy.yml <<'COMPOSE'
+          name: astra
+          services:
+            postgres:
+              image: pgvector/pgvector:pg17
+              restart: unless-stopped
+              environment:
+                POSTGRES_USER: ${POSTGRES_USER}
+                POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+                POSTGRES_DB: ${POSTGRES_DB}
+                PGDATA: /var/lib/postgresql/data/pgdata
+              volumes: [postgres_data:/var/lib/postgresql/data]
+              # Loopback only. The tunnel fronts the API; the database is never
+              # reachable from outside the host.
+              ports: ["127.0.0.1:5432:5432"]
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+                interval: 5s
+                timeout: 3s
+                retries: 10
+
+            redis:
+              image: redis:7-alpine
+              restart: unless-stopped
+              command: redis-server --appendonly yes --appendfsync everysec
+              volumes: [redis_data:/data]
+              ports: ["127.0.0.1:6379:6379"]
+              healthcheck:
+                test: ["CMD", "redis-cli", "ping"]
+                interval: 5s
+                timeout: 3s
+                retries: 10
+
+            api:
+              image: IMAGE_PLACEHOLDER
+              restart: unless-stopped
+              env_file: .env
+              environment:
+                POSTGRES_HOST: postgres
+                REDIS_HOST: redis
+              ports: ["127.0.0.1:8000:8000"]
+              depends_on:
+                postgres: {condition: service_healthy}
+                redis: {condition: service_healthy}
+              # No --reload in production; the source bind-mount is dev-only.
+              command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+          volumes:
+            postgres_data:
+            redis_data:
+          COMPOSE
+          sed -i "s|IMAGE_PLACEHOLDER|${{ steps.image.outputs.name }}:${{ inputs.version }}|" docker-compose.deploy.yml
+
+      - name: Write server environment
+        # Secrets are materialised here and shipped over SSH — never committed,
+        # never printed. GitHub masks them in logs.
+        run: |
+          umask 077
+          cat > .env.deploy <<ENV
+          ASTRA_ENV=production
+          ASTRA_DEVICE_TOKEN=${{ secrets.ASTRA_DEVICE_TOKEN }}
+          POSTGRES_USER=astra
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB=astra
+          POSTGRES_HOST=postgres
+          POSTGRES_PORT=5432
+          REDIS_HOST=redis
+          REDIS_PORT=6379
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          ASTRA_MODEL_PROFILE=cloud_first
+          ASTRA_MODEL_REASONING=anthropic/claude-sonnet-5
+          ASTRA_MODEL_CHEAP=anthropic/claude-haiku-4-5
+          ASTRA_MONTHLY_COST_CEILING_MINOR=${{ vars.ASTRA_MONTHLY_COST_CEILING_MINOR || '200000' }}
+          ASTRA_COST_CEILING_ACTION=fallback
+          ASTRA_USD_INR_PAISE=8800
+          ASTRA_TIMEZONE=Asia/Kolkata
+          ASTRA_CURRENCY=INR
+          ENV
+
+      - name: Copy to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: "docker-compose.deploy.yml,.env.deploy"
+          target: "~/astra"
+
+      - name: Deploy
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:${{ inputs.version }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: IMAGE
+          script: |
+            set -euo pipefail
+            cd ~/astra
+            mv -f .env.deploy .env && chmod 600 .env
+            mv -f docker-compose.deploy.yml docker-compose.yml
+
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+            # Migrations run after the new image is up, against the running
+            # database. Alembic is idempotent, so a redeploy of the same version
+            # is a no-op rather than an error.
+            docker compose run --rm api alembic upgrade head
+            docker image prune -f
+
+      - name: Verify the deployment answers
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            for i in $(seq 1 30); do
+              if curl -fsS localhost:8000/health/live >/dev/null 2>&1; then
+                echo "API is live"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "API did not come up within 60s"
+            cd ~/astra && docker compose logs --tail 50 api
+            exit 1

@@ -1,0 +1,54 @@
+[project]
+name = "astra-backend"
+version = "0.1.0"
+description = "Project Astra — voice-first personal AI constellation"
+requires-python = ">=3.12"
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "psycopg2-binary>=2.9",   # alembic runs sync; asyncpg is for the app
+    "alembic>=1.14",
+    "pgvector>=0.3.6",
+
+    "redis>=5.2",
+
+    # Wake-name routing. Names arrive through a speech recogniser, so matching is
+    # phonetic + fuzzy, never string equality. See docs/conversation-architecture.md §4.
+    "metaphone>=0.6",
+    "rapidfuzz>=3.10",
+    "pyyaml>=6.0",
+
+    "structlog>=24.4",
+    "python-json-logger>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",
+    "ruff>=0.8",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# B008 flags function calls in argument defaults. `Depends(...)` in a default is
+# the documented FastAPI idiom, so the rule is noise in this codebase.
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
