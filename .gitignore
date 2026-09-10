@@ -15,17 +15,26 @@ node_modules/
 dist/
 .vite/
 
-data/
-models/
-backups/
+# Runtime data directories, anchored to the repo root with a leading slash.
+#
+# Anchoring is not cosmetic here. A bare `models/` matches a directory of that
+# name at ANY depth, and it silently excluded backend/app/db/models — the entire
+# SQLAlchemy models package — from the first commit. Nothing complained locally,
+# because the files were still on disk; CI checked out a tree where env.py could
+# not import them. Keep the leading slash on anything named after a concept that
+# could also be a source package.
+/data/
+/models/
+/backups/
+/audio_cache/
 *.db
 *.sqlite3
-audio_cache/
 
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 
-# Local model weights — gigabytes, and re-downloadable
-models/*.gguf
+# Local model weights — gigabytes, and re-downloadable. Unanchored on purpose:
+# weights are unwelcome wherever they appear.
+*.gguf

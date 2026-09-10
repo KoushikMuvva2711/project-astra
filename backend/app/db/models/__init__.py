@@ -1,0 +1,95 @@
+"""All models must be imported here so Alembic autogenerate sees them."""
+
+from app.db.models.core import (
+    AGENT_NAMES,
+    NAMESPACES,
+    Agent,
+    Session,
+    SessionSummary,
+    Turn,
+    User,
+)
+from app.db.models.finance import (
+    Bill,
+    Budget,
+    Expense,
+    ExpenseCategory,
+    SavingsGoal,
+    Subscription,
+)
+from app.db.models.health import (
+    BodyMetric,
+    ExerciseSet,
+    Food,
+    HealthSample,
+    Meal,
+    MealItem,
+    Workout,
+)
+from app.db.models.home import (
+    Document,
+    InventoryItem,
+    Reminder,
+    Trip,
+    Warranty,
+)
+from app.db.models.learning import (
+    Application,
+    CurriculumItem,
+    LearningTrack,
+    Paper,
+    StudySession,
+)
+from app.db.models.memory import (
+    CostLedger,
+    FactPredicate,
+    MemoryChunk,
+    MemoryConflict,
+    MemoryEvent,
+    MemoryFact,
+    MemoryHint,
+)
+from app.db.models.work import Project, ProjectSession, Task
+
+__all__ = [
+    "AGENT_NAMES",
+    "NAMESPACES",
+    "Agent",
+    "Application",
+    "Bill",
+    "BodyMetric",
+    "Budget",
+    "CostLedger",
+    "CurriculumItem",
+    "Document",
+    "ExerciseSet",
+    "Expense",
+    "ExpenseCategory",
+    "FactPredicate",
+    "Food",
+    "HealthSample",
+    "InventoryItem",
+    "LearningTrack",
+    "Meal",
+    "MealItem",
+    "MemoryChunk",
+    "MemoryConflict",
+    "MemoryEvent",
+    "MemoryFact",
+    "MemoryHint",
+    "Paper",
+    "Project",
+    "ProjectSession",
+    "Reminder",
+    "SavingsGoal",
+    "Session",
+    "SessionSummary",
+    "StudySession",
+    "Subscription",
+    "Task",
+    "Trip",
+    "Turn",
+    "User",
+    "Warranty",
+    "Workout",
+]

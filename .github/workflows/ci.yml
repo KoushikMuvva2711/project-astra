@@ -80,6 +80,22 @@ jobs:
       - name: Lint
         run: ruff check app tests
 
+      - name: Verify the checkout is complete
+        # A `models/` line in .gitignore, meant for the Ollama weights, matched
+        # backend/app/db/models at any depth and kept the whole SQLAlchemy models
+        # package out of the first commit. Everything passed locally, because the
+        # files were still on disk. This asserts against the checked-out tree, so
+        # a file that exists only on someone's machine fails here by name instead
+        # of as a ModuleNotFoundError halfway through alembic.
+        run: |
+          python -c "
+          import app.db.models  # noqa: F401
+          from app.db.base import Base
+          count = len(Base.metadata.tables)
+          assert count > 30, f'only {count} tables registered; the models package is incomplete'
+          print(f'{count} tables registered')
+          "
+
       - name: Migrate
         run: alembic upgrade head
 
