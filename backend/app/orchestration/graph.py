@@ -526,6 +526,8 @@ _HEADLINE_COUNT = {
     "document_expiry": "count",
     "inventory_status": "low_count",
     "workout_history": "session_count",
+    "project_list": "count",
+    "task_list": "count",
 }
 
 # Counts are small and must be spoken as words — the invariants require it — so a
@@ -634,6 +636,38 @@ def _event_for(tool_name: str, spec: AgentSpec, result, context: ToolContext):
                 "subject": result.data.get("subject"),
                 "due_at": result.data.get("due_at"),
                 "recurrence": result.data.get("recurrence"),
+            },
+        }
+    if tool_name == "project_record_state":
+        return {
+            "type": "project.state_recorded",
+            "agent": spec.name,
+            "turn_id": context.turn_id,
+            "payload": {
+                "project": result.data.get("project"),
+                "next_step": result.data.get("next_step"),
+            },
+        }
+    if tool_name == "task_complete":
+        return {
+            "type": "task.completed",
+            "agent": spec.name,
+            "turn_id": context.turn_id,
+            "payload": {
+                "title": result.data.get("title"),
+                "project": result.data.get("project"),
+                "remaining": result.data.get("remaining"),
+            },
+        }
+    if tool_name == "task_create":
+        return {
+            "type": "task.created",
+            "agent": spec.name,
+            "turn_id": context.turn_id,
+            "payload": {
+                "title": result.data.get("title"),
+                "project": result.data.get("project"),
+                "due_on": result.data.get("due_on"),
             },
         }
     if tool_name in ("grocery_add", "inventory_consume", "grocery_clear"):

@@ -26,6 +26,13 @@ dependencies = [
 
     "structlog>=24.4",
     "python-json-logger>=2.0",
+
+    # zoneinfo reads the IANA database from the operating system. Debian and the
+    # GitHub runners ship one, so the container and CI work by accident; Windows
+    # ships none, and a minimal image may not either. Selene resolves every
+    # reminder through ZoneInfo("Asia/Kolkata"), so without this the whole
+    # feature raises ZoneInfoNotFoundError on any host that happens to lack it.
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

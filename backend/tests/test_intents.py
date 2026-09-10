@@ -310,3 +310,62 @@ def test_an_unguarded_tool_is_left_alone():
     result = ToolResult.success("Set. Pay rent, 1 October.", reminder_id=4)
     _, substituted = _guard_figures("Set, rent on the 1st.", result, "reminder_create")
     assert not substituted
+
+
+# ── Nova's fast paths ────────────────────────────────────────────────────────
+#
+# Only the reads are deterministic. "Where was I" is the turn Nova answered by
+# inventing an authentication module with zero projects on file, so it must start
+# from a row or from an explicit "none on record" — never from a blank context.
+# Task writes stay with the model: "I should refactor the parser" is as often
+# thinking aloud as it is a task, and the model can ask.
+
+@pytest.mark.parametrize(
+    "utterance,expected",
+    [
+        ("where was I", "project_resume"),
+        ("where did I leave off", "project_resume"),
+        ("continue where I left off", "project_resume"),
+        ("what was I working on", "project_resume"),
+        ("catch me up", "project_resume"),
+        ("what's the state of the parser", "project_resume"),
+        ("what projects do I have", "project_list"),
+        ("list my projects", "project_list"),
+        ("what's left", "task_list"),
+        ("what's on my plate", "task_list"),
+        ("my tasks", "task_list"),
+        ("what's blocked", "task_list"),
+    ],
+)
+def test_nova_fast_paths(utterance, expected):
+    intent = detect("nova", utterance)
+    assert intent is not None, f"no intent for {utterance!r}"
+    assert intent.tool == expected
+
+
+def test_asking_what_is_blocked_filters_to_blocked():
+    assert detect("nova", "what's blocked").arguments == {"state": "blocked"}
+    assert detect("nova", "what's left").arguments == {}
+
+
+def test_novas_reads_never_block_write_tools():
+    """Reads are safe to force; they take nothing away from the model."""
+    for utterance in ("where was I", "list my projects", "what's left"):
+        assert not detect("nova", utterance).blocks_write_tools
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "I should refactor the parser at some point",
+        "how long do you think the memory layer will take",
+        "this project is dragging",
+    ],
+)
+def test_nova_judgement_calls_are_left_to_the_model(utterance):
+    assert detect("nova", utterance) is None
+
+
+def test_nova_intents_do_not_leak_to_other_agents():
+    assert detect("vega", "where was I") is None
+    assert detect("selene", "list my projects") is None

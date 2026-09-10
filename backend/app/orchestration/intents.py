@@ -143,6 +143,8 @@ def detect(agent: str, text: str) -> Intent | None:
         return _detect_health(text)
     if agent == "selene":
         return _detect_home(text)
+    if agent == "nova":
+        return _detect_work(text)
     if agent not in _FINANCE_READERS:
         return None
 
@@ -340,6 +342,58 @@ def _detect_home(text: str) -> Intent | None:
         return Intent(
             tool="grocery_add", arguments={"item": item}, blocks_write_tools=True
         )
+
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Nova
+# --------------------------------------------------------------------------- #
+
+# NOV-01. "Where was I" is Nova's defining turn and the one she has already been
+# caught answering from imagination — with zero projects on file she described an
+# authentication module and a commit history to match. Running project_resume
+# deterministically means the answer starts from a row or from an explicit "no
+# projects on record", never from a blank context the model fills in.
+RESUME_QUERY = re.compile(
+    r"\b(where (was|were) (i|we)|where did (i|we) leave|continue where|"
+    r"pick up where|resume|what was i (working|doing)|what were we (working|doing)|"
+    r"catch me up|where are we (on|with)|status on|what'?s the state of)\b",
+    re.IGNORECASE,
+)
+
+PROJECT_QUERY = re.compile(
+    r"\b(what projects|my projects|list (my )?projects|which projects|"
+    r"what am i building|what'?s active)\b",
+    re.IGNORECASE,
+)
+
+TASK_QUERY = re.compile(
+    r"\b(what'?s (left|open|next|on my plate)|my tasks|list (my )?tasks|"
+    r"what do i need to do|what'?s outstanding|what'?s blocked|open tasks|"
+    r"todo list|to-do list)\b",
+    re.IGNORECASE,
+)
+
+def _detect_work(text: str) -> Intent | None:
+    """Nova's deterministic paths.
+
+    Only the read side is deterministic. Task creation and completion carry more
+    ambiguity than an expense or a meal — "I should refactor the parser" is as
+    often thinking aloud as it is a task — so those stay with the model, which
+    can ask. The reads are where fabrication happens, and reads are safe to force.
+    """
+    if RESUME_QUERY.search(text):
+        return Intent(tool="project_resume", arguments={})
+
+    if PROJECT_QUERY.search(text):
+        return Intent(tool="project_list", arguments={})
+
+    if TASK_QUERY.search(text):
+        arguments: dict[str, Any] = {}
+        if re.search(r"\bblocked\b", text, re.IGNORECASE):
+            arguments["state"] = "blocked"
+        return Intent(tool="task_list", arguments=arguments)
 
     return None
 

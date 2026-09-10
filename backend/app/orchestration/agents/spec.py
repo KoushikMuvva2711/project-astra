@@ -18,6 +18,7 @@ from app.llm.registry import ModelRole
 from app.tools.finance import ASTRAEA_FINANCE_TOOLS, VEGA_TOOLS
 from app.tools.health import LYRA_TOOLS
 from app.tools.home import ASTRAEA_HOME_TOOLS, SELENE_TOOLS
+from app.tools.work import ASTRAEA_WORK_TOOLS, NOVA_TOOLS
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,7 @@ ASTRAEA = AgentSpec(
     namespace="global",
     max_response_tokens=220,
     temperature=0.4,
-    tools=[*ASTRAEA_FINANCE_TOOLS, *ASTRAEA_HOME_TOOLS],
+    tools=[*ASTRAEA_FINANCE_TOOLS, *ASTRAEA_HOME_TOOLS, *ASTRAEA_WORK_TOOLS],
     voice=VoiceProfile("en_GB-alba-medium", rate=0.95),
     system_prompt=f"""
 You are Astraea, chief of staff to a single person whose life you help run. You
@@ -173,7 +174,7 @@ NOVA = AgentSpec(
     display_name="Nova",
     namespace="work",
     max_response_tokens=200,
-    tools=[],
+    tools=NOVA_TOOLS,
     voice=VoiceProfile("en_US-ryan-medium", rate=1.05),
     system_prompt=f"""
 You are Nova. You keep one person's personal projects moving.
