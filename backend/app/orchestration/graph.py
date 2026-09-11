@@ -690,10 +690,21 @@ def _render_tool_result(result) -> str:
 
     Figures are presented as already-formatted strings so the model has a correct
     phrasing to quote and no reason to compute one.
+
+    Database ids are withheld. Everything here is a candidate for being said out
+    loud, and a weak model treats an id as a fact worth reporting — observed
+    live, where Nova followed "Tracking Astra Backend" with "the project ID is
+    5". The ids stay in `result.data` for events and tests; they simply are not
+    something the model can read out, because it never sees them.
     """
     import json
 
-    payload = {"ok": result.ok, "message": result.message, **result.data}
+    speakable = {
+        key: value
+        for key, value in result.data.items()
+        if key != "id" and not key.endswith("_id")
+    }
+    payload = {"ok": result.ok, "message": result.message, **speakable}
     if result.needs_confirmation:
         payload["ACTION_REQUIRED"] = (
             "Nothing was saved. Ask the user which amount they meant, then call "

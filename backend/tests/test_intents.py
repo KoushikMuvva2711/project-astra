@@ -369,3 +369,61 @@ def test_nova_judgement_calls_are_left_to_the_model(utterance):
 def test_nova_intents_do_not_leak_to_other_agents():
     assert detect("vega", "where was I") is None
     assert detect("selene", "list my projects") is None
+
+
+# ── Expanded contractions ────────────────────────────────────────────────────
+#
+# A speech recogniser returns "what's left" and "what is left" for the same
+# utterance on consecutive turns. Matching only the contracted form dropped the
+# expanded one to the model, which picked a plausible-looking tool instead —
+# seen live, where "what is left" reached project_resume rather than task_list.
+
+@pytest.mark.parametrize(
+    "agent,contracted,expanded,tool",
+    [
+        ("nova", "what's left", "what is left", "task_list"),
+        ("nova", "what's blocked", "what is blocked", "task_list"),
+        ("nova", "what's the state of the parser", "what is the state of the parser",
+         "project_resume"),
+        ("nova", "what's active", "what is active", "project_list"),
+        ("selene", "what's due this week", "what is due this week", "reminder_list"),
+        ("selene", "what's on the grocery list", "what is on the grocery list",
+         "grocery_list"),
+        ("selene", "what's running low", "what is running low", "inventory_status"),
+        ("selene", "what's expiring soon", "what is expiring soon", "document_expiry"),
+    ],
+)
+def test_both_contracted_and_expanded_forms_reach_the_same_tool(
+    agent, contracted, expanded, tool
+):
+    for utterance in (contracted, expanded):
+        intent = detect(agent, utterance)
+        assert intent is not None, f"no intent for {utterance!r}"
+        assert intent.tool == tool, f"{utterance!r} -> {intent.tool}, expected {tool}"
+
+
+# ── Database ids never reach the model ───────────────────────────────────────
+
+def test_database_ids_are_withheld_from_what_the_model_sees():
+    """Everything rendered is a candidate for being said aloud. Seen live: Nova
+    followed "Tracking Astra Backend" with "the project ID is 5"."""
+    from app.orchestration.graph import _render_tool_result
+
+    result = ToolResult.success(
+        "Tracking Astra Backend.",
+        project_id=5, task_id=9, id=3, name="Astra Backend", open_tasks=2,
+    )
+    rendered = _render_tool_result(result)
+
+    assert "project_id" not in rendered
+    assert "task_id" not in rendered
+    assert '"id"' not in rendered
+    # The substance survives.
+    assert "Astra Backend" in rendered
+    assert "open_tasks" in rendered
+
+
+def test_withholding_ids_does_not_remove_them_from_the_result():
+    """Events and tests still need them; only the model's view is filtered."""
+    result = ToolResult.success("x", project_id=5)
+    assert result.data["project_id"] == 5

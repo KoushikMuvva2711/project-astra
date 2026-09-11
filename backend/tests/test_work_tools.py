@@ -24,8 +24,10 @@ def ctx(db, turn_id):
     return ToolContext(session=db, agent="nova", turn_id=turn_id)
 
 
-async def call(name, ctx, **args):
-    return await dispatch(name, args, allowed=NOVA_TOOLS, context=ctx)
+async def call(tool, ctx, /, **args):
+    """Positional-only, so a tool argument called `name` reaches **args rather
+    than colliding with this helper's own parameter."""
+    return await dispatch(tool, args, allowed=NOVA_TOOLS, context=ctx)
 
 
 # ── The empty state, which is where fabrication happens ──────────────────────
@@ -42,7 +44,7 @@ async def test_resuming_with_nothing_on_record_says_so(ctx):
     result = await call("project_resume", ctx)
     assert result.data["found"] is False
     assert result.data["projects_on_record"] == 0
-    assert "no projects on record" in result.message.lower()
+    assert "nothing on record" in result.message.lower()
 
 
 async def test_resuming_a_project_that_does_not_exist_fails_loudly(ctx):
@@ -354,3 +356,52 @@ async def test_every_nova_tool_is_registered():
 
     missing = [name for name in NOVA_TOOLS if REGISTRY.get(name) is None]
     assert not missing
+
+
+# ── Spoken output carries no instructions to the model ───────────────────────
+#
+# `message` is spoken verbatim whenever the model adds nothing of its own, so a
+# sentence aimed at the agent gets read out to the user. Observed live: "No
+# projects on record at all. Ask what they are working on."
+
+_AGENT_DIRECTED = ("ask what", "say so", "say the", "do not describe", "tell them")
+
+
+async def test_no_success_message_instructs_the_model(ctx):
+    """Guidance belongs in `data`, which the model reads and never reads out."""
+    await call("project_create", ctx, name="Astra")
+
+    results = [
+        await call("project_resume", ctx),
+        await call("project_list", ctx),
+        await call("task_list", ctx),
+    ]
+    # And the genuinely empty case, which is where the leak happened.
+    empty = ToolContext(session=ctx.session, agent="nova", turn_id=ctx.turn_id)
+    await ctx.session.execute(sa.text("DELETE FROM projects"))
+    results.append(await call("project_resume", empty))
+
+    for result in results:
+        if not result.ok:
+            continue
+        lowered = result.message.lower()
+        leaked = [phrase for phrase in _AGENT_DIRECTED if phrase in lowered]
+        assert not leaked, f"{result.message!r} instructs the model: {leaked}"
+
+
+async def test_guidance_is_still_available_to_the_model(ctx):
+    """Removing it from speech must not remove it from the model's view."""
+    result = await call("project_resume", ctx)
+    assert result.data["projects_on_record"] == 0
+    assert "guidance" in result.data
+
+
+async def test_a_state_filtered_empty_list_reflects_the_filter(ctx):
+    """Answering "what's blocked" with "no open tasks" is a different claim,
+    and a false one when tasks exist."""
+    await call("task_create", ctx, title="a real open task")
+
+    result = await call("task_list", ctx, state="blocked")
+    assert result.data["count"] == 0
+    assert "nothing blocked" in result.message.lower()
+    assert "no open tasks" not in result.message.lower()

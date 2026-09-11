@@ -209,10 +209,14 @@ async def project_resume(
             await context.session.execute(sa.text("SELECT COUNT(*) FROM projects"))
         ).scalar_one()
         if total == 0:
+            # `message` is spoken verbatim when the model adds nothing, so it
+            # carries no instructions to the model. Guidance goes in `data`,
+            # which the model reads but never reads out.
             return ToolResult.success(
-                "No projects on record at all. Ask what they are working on.",
+                "Nothing on record yet.",
                 found=False,
                 projects_on_record=0,
+                guidance="Ask what they are working on.",
             )
         return ToolResult.failure(
             f"No project matching {project!r}. There are {total} on record.",
@@ -264,8 +268,9 @@ async def project_resume(
     if session_row is None:
         data["has_recorded_state"] = False
         return ToolResult.success(
-            f"{target.name} has no recorded session state. "
-            f"{len(open_tasks)} open tasks. Say the state was never captured.",
+            f"{target.name}, but the state was never captured. "
+            f"{len(open_tasks)} open tasks.",
+            guidance="Say the state was never recorded; do not infer what was being done.",
             **data,
         )
 
@@ -507,7 +512,15 @@ async def task_list(
 
     scope = f" on {target.name}" if target else ""
     if not rows:
-        return ToolResult.success(f"No open tasks{scope}.", count=0, tasks=[])
+        # Reflect the filter. Answering "what's blocked" with "no open tasks" is
+        # a different claim from the true one, and a wrong one when tasks exist.
+        empty = {
+            "blocked": "Nothing blocked",
+            "doing": "Nothing in progress",
+            "todo": "Nothing queued",
+            "done": "Nothing completed",
+        }.get(state or "", f"No open tasks{scope}")
+        return ToolResult.success(f"{empty}{scope if state else ''}.", count=0, tasks=[])
 
     blocked = sum(1 for r in rows if r.state == "blocked")
     return ToolResult.success(
@@ -575,9 +588,12 @@ async def task_complete(*, context: ToolContext, match: str) -> ToolResult:
 
     remaining = (
         await context.session.execute(
+            # The cast is not decoration: asyncpg infers parameter types from
+            # context, and a bare `:pid IS NULL` gives it nothing to infer from,
+            # so it raises AmbiguousParameterError rather than binding NULL.
             sa.text(
                 "SELECT COUNT(*) FROM tasks WHERE state IN ('todo','doing','blocked') "
-                "AND (:pid IS NULL OR project_id = :pid)"
+                "AND (CAST(:pid AS bigint) IS NULL OR project_id = CAST(:pid AS bigint))"
             ),
             {"pid": target.project_id},
         )

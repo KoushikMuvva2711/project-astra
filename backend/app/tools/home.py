@@ -211,7 +211,8 @@ async def reminder_list(*, context: ToolContext, days: int = 7) -> ToolResult:
         overdue=overdue,
         reminders=[
             {
-                "id": r.id,
+                # No id: reminder_complete matches on text, so an id here would
+                # only be something the model could read out loud.
                 "text": r.text,
                 "when": speak_when(r.due_at, r.recurrence),
                 "due_at": r.due_at.isoformat(),

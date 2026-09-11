@@ -65,6 +65,13 @@ NON_SPEND_CONTEXT = re.compile(
     re.IGNORECASE,
 )
 
+# Speech recognisers expand contractions as often as they keep them: the same
+# question arrives as "what's left" one turn and "what is left" the next.
+# Matching only the contracted form drops the utterance to the model, which then
+# picks a plausible-looking tool — seen live, where "what is left" reached
+# project_resume instead of task_list.
+WHATS = r"what(?:'?s|\s+is|\s+are)"
+
 PERIODS = {
     "today": "today",
     "this week": "week",
@@ -236,13 +243,13 @@ REMINDER_VERBS = re.compile(
 REMINDER_QUERY = re.compile(
     # "on" is deliberately absent: "what's on the grocery list" is not a reminder
     # query, and a bare "on" swallows it.
-    r"\b(what'?s? (due|coming up|pending)|what do i have (coming|due)|"
-    r"any reminders|my reminders|what'?s? left to do|anything due)\b",
+    rf"\b({WHATS}\s+(due|coming up|pending)|what do i have (coming|due)|"
+    rf"any reminders|my reminders|{WHATS}\s+left to do|anything due)\b",
     re.IGNORECASE,
 )
 
 GROCERY_QUERY = re.compile(
-    r"\b(what'?s? on (the|my) (grocery |shopping )?list|"
+    rf"\b({WHATS}\s+on (the|my) (grocery |shopping )?list|"
     r"(grocery|shopping) list|what do i need to buy|what am i out of)\b",
     re.IGNORECASE,
 )
@@ -266,13 +273,13 @@ RAN_OUT = re.compile(
 )
 
 LOW_STOCK_QUERY = re.compile(
-    r"\b(what'?s? running low|running low|what'?s? low|stock check|"
+    rf"\b({WHATS}\s+running low|running low|{WHATS}\s+low|stock check|"
     r"how much .* (do i have|is left)|do i have any)\b",
     re.IGNORECASE,
 )
 
 DOCUMENT_QUERY = re.compile(
-    r"\b(what'?s? expiring|expiring soon|document.*expir|passport.*expir|"
+    rf"\b({WHATS}\s+expiring|expiring soon|document.*expir|passport.*expir|"
     r"visa.*expir|when does my .* expire)\b",
     re.IGNORECASE,
 )
@@ -358,19 +365,19 @@ def _detect_home(text: str) -> Intent | None:
 RESUME_QUERY = re.compile(
     r"\b(where (was|were) (i|we)|where did (i|we) leave|continue where|"
     r"pick up where|resume|what was i (working|doing)|what were we (working|doing)|"
-    r"catch me up|where are we (on|with)|status on|what'?s the state of)\b",
+    rf"catch me up|where are we (on|with)|status on|{WHATS}\s+the state of)\b",
     re.IGNORECASE,
 )
 
 PROJECT_QUERY = re.compile(
     r"\b(what projects|my projects|list (my )?projects|which projects|"
-    r"what am i building|what'?s active)\b",
+    rf"what am i building|{WHATS}\s+active)\b",
     re.IGNORECASE,
 )
 
 TASK_QUERY = re.compile(
-    r"\b(what'?s (left|open|next|on my plate)|my tasks|list (my )?tasks|"
-    r"what do i need to do|what'?s outstanding|what'?s blocked|open tasks|"
+    rf"\b({WHATS}\s+(left|open|next|on my plate)|my tasks|list (my )?tasks|"
+    rf"what do i need to do|{WHATS}\s+outstanding|{WHATS}\s+blocked|open tasks|"
     r"todo list|to-do list)\b",
     re.IGNORECASE,
 )
